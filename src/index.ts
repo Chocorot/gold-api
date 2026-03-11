@@ -9,7 +9,7 @@ dotenv.config();
 
 // Initialize Firestore
 initializeApp({ credential: applicationDefault() });
-const db = getFirestore();
+const db = getFirestore('gold-api');
 
 interface GoldRecord {
     timestamp: number;
