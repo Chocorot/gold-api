@@ -1,7 +1,8 @@
 import axios from 'axios';
+import { Timestamp } from 'firebase-admin/firestore';
 import db from '../db/firestore';
 import { config } from '../config';
-import { GoldCandle } from '../types/gold.types';
+import { GoldCandle, GoldPricePoint } from '../types/gold.types';
 
 export type IntervalKey = 'daily' | 'weekly' | 'monthly';
 
@@ -11,9 +12,24 @@ const INTERVAL_CONFIG: Record<IntervalKey, { collection: string; interval: strin
     monthly: { collection: 'gold_ohlc_monthly', interval: '1month' },
 };
 
+const REALTIME_COLLECTION = 'gold_prices';
+
+const MINUTE_MS = 60_000;
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
+
+const PRICE_RANGE_MAP: Record<string, { windowMs: number; sampleMs?: number }> = {
+    '1h': { windowMs: HOUR_MS },
+    '5h': { windowMs: 5 * HOUR_MS },
+    '1d': { windowMs: DAY_MS, sampleMs: 10 * MINUTE_MS },
+    '5d': { windowMs: 5 * DAY_MS, sampleMs: 10 * MINUTE_MS },
+    '1w': { windowMs: 7 * DAY_MS, sampleMs: 10 * MINUTE_MS },
+    // User requested month view to use 2-hour sampling from realtime data.
+    '1m': { windowMs: 30 * DAY_MS, sampleMs: 2 * HOUR_MS },
+};
+
 // Maps public ?range= param to the correct collection and lookback
 const RANGE_MAP: Record<string, { key: IntervalKey; days: number | 'ytd' }> = {
-    '1m':   { key: 'daily',   days: 30   },
     '3m':   { key: 'daily',   days: 90   },
     '6m':   { key: 'daily',   days: 180  },
     'ytd':  { key: 'daily',   days: 'ytd' },
@@ -26,6 +42,10 @@ const RANGE_MAP: Record<string, { key: IntervalKey; days: number | 'ytd' }> = {
 class GoldHistoryService {
     private col(key: IntervalKey) {
         return db.collection(INTERVAL_CONFIG[key].collection);
+    }
+
+    private realtimeCol() {
+        return db.collection(REALTIME_COLLECTION);
     }
 
     // -------------------------------------------------------------------------
@@ -133,12 +153,59 @@ class GoldHistoryService {
         }
     }
 
+    private downsamplePoints(points: GoldPricePoint[], sampleMs: number): GoldPricePoint[] {
+        if (sampleMs <= 0) return points;
+
+        const output: GoldPricePoint[] = [];
+        let lastBucket = -1;
+
+        for (const point of points) {
+            const bucket = Math.floor(point.timestamp / sampleMs);
+            if (bucket !== lastBucket) {
+                output.push(point);
+                lastBucket = bucket;
+            }
+        }
+
+        return output;
+    }
+
+    private async getPriceHistory(windowMs: number, sampleMs?: number): Promise<GoldPricePoint[]> {
+        const cutoffMs = Date.now() - windowMs;
+        const cutoffTs = Timestamp.fromMillis(cutoffMs);
+
+        const snapshot = await this.realtimeCol()
+            .where('timestamp', '>=', cutoffTs)
+            .orderBy('timestamp', 'asc')
+            .get();
+
+        const points = snapshot.docs.map((doc) => {
+            const data = doc.data() as { timestamp: Timestamp | number; price: number };
+            const timestamp = typeof data.timestamp === 'number'
+                ? data.timestamp
+                : data.timestamp.toMillis();
+
+            return {
+                timestamp,
+                price: data.price,
+            } as GoldPricePoint;
+        });
+
+        if (!sampleMs) return points;
+        return this.downsamplePoints(points, sampleMs);
+    }
+
     // -------------------------------------------------------------------------
-    // Public read: returns OHLC candles for the requested range, oldest → newest.
-    // Supported ranges: 1m  3m  6m  ytd  1y  2y  5y  10y
+    // Public read: returns historical series sorted oldest → newest.
+    // Realtime ranges come from 2-minute price data, longer ranges from OHLC.
     // -------------------------------------------------------------------------
-    async getHistory(range: string = '1m'): Promise<GoldCandle[]> {
-        const mapping = RANGE_MAP[range] ?? RANGE_MAP['1m'];
+    async getHistory(range: string = '1m'): Promise<Array<GoldPricePoint | GoldCandle>> {
+        const priceRange = PRICE_RANGE_MAP[range];
+        if (priceRange) {
+            return this.getPriceHistory(priceRange.windowMs, priceRange.sampleMs);
+        }
+
+        const mapping = RANGE_MAP[range] ?? RANGE_MAP['3m'];
         const col = this.col(mapping.key);
 
         let cutoffStr: string;
