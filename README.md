@@ -10,7 +10,7 @@ It stores real-time price points and historical OHLC candles in Firestore, then 
 | Collection | Interval | Used For |
 |---|---|---|
 | `gold_prices` | 2-minute realtime | Latest price endpoint |
-| `gold_ohlc_daily` | `1day` | 1M, 3M, 6M, YTD charts |
+| `gold_ohlc_daily` | `1day` | 3M, 6M, YTD charts |
 | `gold_ohlc_weekly` | `1week` | 1Y, 2Y charts |
 | `gold_ohlc_monthly` | `1month` | 5Y, 10Y charts |
 
@@ -22,7 +22,12 @@ Why split by interval:
 
 | Query `range` | Collection |
 |---|---|
-| `1m` | `gold_ohlc_daily` |
+| `1h` | `gold_prices` (full 2-minute points) |
+| `5h` | `gold_prices` (full 2-minute points) |
+| `1d` | `gold_prices` (downsampled to 10-minute points) |
+| `5d` | `gold_prices` (downsampled to 10-minute points) |
+| `1w` | `gold_prices` (downsampled to 10-minute points) |
+| `1m` | `gold_prices` (downsampled to 2-hour points) |
 | `3m` | `gold_ohlc_daily` |
 | `6m` | `gold_ohlc_daily` |
 | `ytd` | `gold_ohlc_daily` |
@@ -89,12 +94,27 @@ Response `200`:
 Response `503` when service has no cached price yet.
 
 #### `GET /api/gold/history?range=1m`
-Returns OHLC candles sorted oldest to newest.
+Returns historical series sorted oldest to newest.
 
 Allowed `range` values:
-- `1m`, `3m`, `6m`, `ytd`, `1y`, `2y`, `5y`, `10y`
+- `1h`, `5h`, `1d`, `5d`, `1w`, `1m`, `3m`, `6m`, `ytd`, `1y`, `2y`, `5y`, `10y`
+
+Sampling rules:
+- `1h`, `5h`: full 2-minute data from `gold_prices`
+- `1d`, `5d`, `1w`: downsampled to 10-minute steps from `gold_prices`
+- `1m`: downsampled to 2-hour steps from `gold_prices`
+- `3m+`: OHLC candles from daily/weekly/monthly collections
 
 Response `200` example:
+
+```json
+[
+  { "timestamp": 1741651200000, "price": 3150.42 },
+  { "timestamp": 1741651320000, "price": 3150.35 }
+]
+```
+
+OHLC response example (`3m`, `6m`, `ytd`, `1y`, `2y`, `5y`, `10y`):
 
 ```json
 [
