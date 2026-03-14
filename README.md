@@ -123,6 +123,33 @@ OHLC response example (`3m`, `6m`, `ytd`, `1y`, `2y`, `5y`, `10y`):
 ]
 ```
 
+### Realtime WebSocket
+
+#### `WS /ws/realtime`
+Mobile clients connect to this endpoint and then send a subscribe message. The server opens and maintains a Twelve Data WS connection only while subscribers exist.
+
+Client subscribe message:
+
+```json
+{ "action": "subscribe", "symbol": "XAU/USD" }
+```
+
+Server price message example:
+
+```json
+{
+  "type": "price",
+  "symbol": "XAU/USD",
+  "price": 3150.42,
+  "timestamp": 1741651200000,
+  "source": "twelvedata-ws"
+}
+```
+
+Notes:
+- Current implementation supports `XAU/USD` only.
+- If no subscribers remain, server closes the upstream Twelve Data WS connection after a short grace period.
+
 ### Private Endpoints
 
 All endpoints below require header:
