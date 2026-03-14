@@ -168,7 +168,9 @@ When no more historical candles are returned:
 { "done": true, "stored": 0, "oldestDate": "1969-12-31" }
 ```
 
-## Scheduler Cron Examples (UTC)
+## Scheduler Cron Examples (MYT)
+
+Set scheduler timezone to `Asia/Kuala_Lumpur`.
 
 Cron format:
 
@@ -176,12 +178,14 @@ Cron format:
 minute hour day-of-month month day-of-week
 ```
 
-| Frequency | Cron | Endpoint |
+| Frequency | Cron (MYT) | Endpoint |
 |---|---|---|
-| Every 2 minutes | `*/2 * * * *` | `POST /api/internal/gold/fetch` |
-| Daily at 23:59 UTC | `59 23 * * *` | `POST /api/internal/gold/fetch-daily` |
-| Weekly Monday 00:01 UTC | `1 0 * * 1` | `POST /api/internal/gold/fetch-weekly` |
-| Monthly day 1 at 00:01 UTC | `1 0 1 * *` | `POST /api/internal/gold/fetch-monthly` |
+| Realtime market session (Mon 06:00-Mon 23:59) | `*/2 6-23 * * 1` | `POST /api/internal/gold/fetch` |
+| Realtime market session (Tue-Fri full day) | `*/2 * * * 2-5` | `POST /api/internal/gold/fetch` |
+| Realtime market session (Sat 00:00-Sat 05:59) | `*/2 0-5 * * 6` | `POST /api/internal/gold/fetch` |
+| Daily history (Tue-Sat 07:10) | `10 7 * * 2-6` | `POST /api/internal/gold/fetch-daily` |
+| Weekly history (Monday 08:15) | `15 8 * * 1` | `POST /api/internal/gold/fetch-weekly` |
+| Monthly history (day 1, 08:20) | `20 8 1 * *` | `POST /api/internal/gold/fetch-monthly` |
 
 ## Backfill Suggestion
 
