@@ -3,6 +3,11 @@ export interface GoldRecord {
     price: number;
 }
 
+export interface GoldPricePoint {
+    timestamp: number;
+    price: number;
+}
+
 export interface GoldCandle {
     date: string;   // "YYYY-MM-DD"
     open: number;
