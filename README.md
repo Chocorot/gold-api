@@ -1,50 +1,69 @@
 # gold-api
 
-A lightweight middleware API that fetches live gold (XAU/USD) prices from [Twelve Data](https://twelvedata.com/) and serves them via Express. Prices are persisted in Firestore and cached in memory. An external scheduler calls a private endpoint every 2 minutes to trigger the fetch.
+A middleware API for XAU/USD data built with Express + TypeScript.
+It stores real-time price points and historical OHLC candles in Firestore, then serves them via public endpoints for charting.
 
-## Features
+## Architecture
 
-- Private fetch endpoint triggered by an external scheduler every 2 minutes
-- Built-in 1.9-minute guard prevents duplicate fetches from scheduler jitter
-- Persists all prices to Firestore
-- In-memory cache for zero-latency reads on the public endpoint
-- Cache is warmed from Firestore on startup
+### Firestore Collections
+
+| Collection | Interval | Used For |
+|---|---|---|
+| `gold_prices` | 2-minute realtime | Latest price endpoint |
+| `gold_ohlc_daily` | `1day` | 1M, 3M, 6M, YTD charts |
+| `gold_ohlc_weekly` | `1week` | 1Y, 2Y charts |
+| `gold_ohlc_monthly` | `1month` | 5Y, 10Y charts |
+
+Why split by interval:
+- Twelve Data intraday depth is limited.
+- Daily, weekly, and monthly series are better for long-range chart windows.
+
+### Range Mapping
+
+| Query `range` | Collection |
+|---|---|
+| `1m` | `gold_ohlc_daily` |
+| `3m` | `gold_ohlc_daily` |
+| `6m` | `gold_ohlc_daily` |
+| `ytd` | `gold_ohlc_daily` |
+| `1y` | `gold_ohlc_weekly` |
+| `2y` | `gold_ohlc_weekly` |
+| `5y` | `gold_ohlc_monthly` |
+| `10y` | `gold_ohlc_monthly` |
 
 ## Requirements
 
 - Node.js 18+
-- A [Twelve Data](https://twelvedata.com/) API key
-- A Firebase project with a Firestore database
-- `GOOGLE_APPLICATION_CREDENTIALS` set to your Firebase service account key file
+- Twelve Data API key
+- Firebase project with Firestore
+- `GOOGLE_APPLICATION_CREDENTIALS` pointing to a service-account JSON file
 
 ## Setup
 
-1. **Install dependencies**
+1. Install dependencies:
 
-   ```bash
-   npm install
-   ```
+```bash
+npm install
+```
 
-2. **Configure environment**
+2. Create `.env` in project root:
 
-   Create a `.env` file in the project root:
+```env
+TWELVE_DATA_KEY=your_twelve_data_api_key
+INTERNAL_API_KEY=your_private_scheduler_key
+FIRESTORE_DATABASE=gold-api
+PORT=3000
+```
 
-   ```env
-   TWELVE_DATA_KEY=your_twelve_data_api_key
-   INTERNAL_API_KEY=your_secret_scheduler_key
-   FIRESTORE_DATABASE=gold-api          # optional, defaults to "gold-api"
-   PORT=3000                            # optional, defaults to 3000
-   ```
+## Run
 
-## Usage
-
-**Development** (runs with `ts-node`, no build step needed):
+Development:
 
 ```bash
 npm run dev
 ```
 
-**Production** (compile first, then run):
+Production:
 
 ```bash
 npm run build
@@ -53,11 +72,13 @@ npm start
 
 ## API
 
-### `GET /api/gold` — Public
+### Public Endpoints
 
-Returns the latest cached gold price.
+#### `GET /api/gold`
+Returns latest cached realtime price.
 
-**Response `200`**
+Response `200`:
+
 ```json
 {
   "timestamp": 1741651200000,
@@ -65,68 +86,120 @@ Returns the latest cached gold price.
 }
 ```
 
-| Field | Type | Description |
+Response `503` when service has no cached price yet.
+
+#### `GET /api/gold/history?range=1m`
+Returns OHLC candles sorted oldest to newest.
+
+Allowed `range` values:
+- `1m`, `3m`, `6m`, `ytd`, `1y`, `2y`, `5y`, `10y`
+
+Response `200` example:
+
+```json
+[
+  { "date": "2026-02-12", "open": 3050.1, "high": 3080.5, "low": 3040.0, "close": 3070.2 },
+  { "date": "2026-02-13", "open": 3071.0, "high": 3095.0, "low": 3060.0, "close": 3088.5 }
+]
+```
+
+### Private Endpoints
+
+All endpoints below require header:
+
+```text
+x-api-key: your_private_scheduler_key
+```
+
+Returns `401` if the key is missing or invalid.
+
+#### `POST /api/internal/gold/fetch`
+Realtime fetch endpoint for 2-minute scheduler.
+
+#### `POST /api/internal/gold/fetch-daily`
+Fetches missing daily candles (smart incremental).
+
+#### `POST /api/internal/gold/fetch-weekly`
+Fetches missing weekly candles (smart incremental).
+
+#### `POST /api/internal/gold/fetch-monthly`
+Fetches missing monthly candles (smart incremental).
+
+#### `POST /api/internal/gold/backfill`
+Backfills older history in 5000-candle chunks.
+
+Request body:
+
+```json
+{ "interval": "daily" }
+```
+
+`interval` must be one of: `daily`, `weekly`, `monthly`.
+
+Response example:
+
+```json
+{ "done": false, "stored": 5000, "oldestDate": "2012-03-14" }
+```
+
+When no more historical candles are returned:
+
+```json
+{ "done": true, "stored": 0, "oldestDate": "1969-12-31" }
+```
+
+## Scheduler Cron Examples (UTC)
+
+Cron format:
+
+```text
+minute hour day-of-month month day-of-week
+```
+
+| Frequency | Cron | Endpoint |
 |---|---|---|
-| `timestamp` | `number` | Unix timestamp (ms) of when the price was recorded |
-| `price` | `number` | XAU/USD price in USD |
+| Every 2 minutes | `*/2 * * * *` | `POST /api/internal/gold/fetch` |
+| Daily at 23:59 UTC | `59 23 * * *` | `POST /api/internal/gold/fetch-daily` |
+| Weekly Monday 00:01 UTC | `1 0 * * 1` | `POST /api/internal/gold/fetch-weekly` |
+| Monthly day 1 at 00:01 UTC | `1 0 1 * *` | `POST /api/internal/gold/fetch-monthly` |
 
-Returns `503` if the cache is empty (first boot, no data yet).
+## Backfill Suggestion
 
----
-
-### `POST /api/internal/gold/fetch` — Private
-
-Triggers a gold price fetch from Twelve Data and stores the result in Firestore. Intended to be called by an external scheduler every 2 minutes.
-
-**Required header**
-```
-x-api-key: your_secret_scheduler_key
-```
-
-**Response**
-- `200` — fetch was executed (or skipped because last record is newer than 1.9 minutes)
-- `401` — missing or incorrect `x-api-key`
-
-No response body.
-
----
-
-## How It Works
-
-1. On startup, the most recent Firestore record is loaded into the in-memory cache.
-2. Your external scheduler calls `POST /api/internal/gold/fetch` every 2 minutes with the `x-api-key` header.
-3. The service checks whether the last stored price is older than 1.9 minutes. If not, the fetch is skipped silently.
-4. If enough time has passed, it calls Twelve Data, writes the new price to Firestore, and updates the cache.
-5. `GET /api/gold` reads directly from the in-memory cache for minimal latency.
+Run each backfill endpoint repeatedly until `done: true`:
+- Daily interval: likely multiple calls for deep history
+- Weekly interval: usually one call is enough
+- Monthly interval: usually one call is enough
 
 ## Project Structure
 
-```
+```text
 src/
-  index.ts                    ← bootstrap: warm cache, start server
-  app.ts                      ← Express setup & middleware
+  index.ts
+  app.ts
   config/
-    index.ts                  ← all env vars in one place
+    index.ts
   db/
-    firestore.ts              ← Firestore client singleton
-  types/
-    gold.types.ts             ← shared TypeScript interfaces
-  services/
-    gold.service.ts           ← business logic: fetch, guard, store, cache
+    firestore.ts
   middleware/
-    privateAuth.ts            ← x-api-key auth guard
+    privateAuth.ts
   routes/
-    index.ts                  ← public route registry
-    gold.routes.ts            ← GET /api/gold
+    index.ts
+    gold.routes.ts
     internal/
-      index.ts                ← private route registry (applies auth)
-      gold.routes.ts          ← POST /api/internal/gold/fetch
+      index.ts
+      gold.routes.ts
+  services/
+    gold.service.ts
+    gold.history.service.ts
+  types/
+    gold.types.ts
 ```
 
 ## Tech Stack
 
-- **Runtime**: Node.js + TypeScript
-- **Web framework**: Express
-- **HTTP client**: Axios
-- **Database**: Firestore (via `firebase-admin`)
-- **Config**: dotenv
+- Node.js
+- TypeScript
+- Express
+- Axios
+- Firebase Admin SDK (Firestore)
+- dotenv
