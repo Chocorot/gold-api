@@ -2,7 +2,7 @@ import axios from 'axios';
 import { Timestamp } from 'firebase-admin/firestore';
 import db from '../db/firestore';
 import { config } from '../config';
-import { GoldCandle, GoldPricePoint } from '../types/gold.types';
+import { GoldCandle, GoldPricePoint, GoldTradingDayData } from '../types/gold.types';
 
 export type IntervalKey = 'daily' | 'weekly' | 'monthly';
 
@@ -193,6 +193,69 @@ class GoldHistoryService {
 
         if (!sampleMs) return points;
         return this.downsamplePoints(points, sampleMs);
+    }
+
+    private formatUtcDate(ms: number): string {
+        return new Date(ms).toISOString().split('T')[0];
+    }
+
+    async getTradingDayData(): Promise<GoldTradingDayData> {
+        const now = new Date();
+        const startMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+        const endMs = startMs + DAY_MS;
+
+        const startTs = Timestamp.fromMillis(startMs);
+        const endTs = Timestamp.fromMillis(endMs);
+
+        const snapshot = await this.realtimeCol()
+            .where('timestamp', '>=', startTs)
+            .where('timestamp', '<', endTs)
+            .orderBy('timestamp', 'asc')
+            .get();
+
+        const points: GoldPricePoint[] = snapshot.docs.map((doc) => {
+            const data = doc.data() as { timestamp: Timestamp | number; price: number };
+            const timestamp = typeof data.timestamp === 'number'
+                ? data.timestamp
+                : data.timestamp.toMillis();
+
+            return {
+                timestamp,
+                price: data.price,
+            };
+        });
+
+        const previousDate = this.formatUtcDate(startMs - DAY_MS);
+        const previousDaySnap = await this.col('daily').doc(previousDate).get();
+
+        let previousClose: number | null = null;
+        if (previousDaySnap.exists) {
+            const previousDayData = previousDaySnap.data() as GoldCandle;
+            previousClose = previousDayData.close;
+        } else {
+            const fallbackSnap = await this.realtimeCol()
+                .where('timestamp', '<', startTs)
+                .orderBy('timestamp', 'desc')
+                .limit(1)
+                .get();
+
+            if (!fallbackSnap.empty) {
+                const fallback = fallbackSnap.docs[0].data() as { price: number };
+                previousClose = fallback.price;
+            }
+        }
+
+        const prices = points.map((point) => point.price);
+        const high = prices.length ? Math.max(...prices) : null;
+        const low = prices.length ? Math.min(...prices) : null;
+
+        return {
+            tradingDay: this.formatUtcDate(startMs),
+            previousClose,
+            high,
+            low,
+            points,
+        };
     }
 
     // -------------------------------------------------------------------------

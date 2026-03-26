@@ -13,6 +13,12 @@ router.get('/', (req: Request, res: Response) => {
     res.json(data);
 });
 
+// Current UTC trading day only: all price points + previous close + day high/low
+router.get('/trading-day', async (req: Request, res: Response) => {
+    const data = await goldHistoryService.getTradingDayData();
+    res.json(data);
+});
+
 // ?range=1h|5h|1d|5d|1w|1m|3m|6m|ytd|1y|2y|5y|10y (defaults to 1m)
 router.get('/history', async (req: Request, res: Response) => {
     const range = typeof req.query.range === 'string' ? req.query.range : '1m';

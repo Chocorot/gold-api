@@ -114,6 +114,29 @@ Response `200` example:
 ]
 ```
 
+#### `GET /api/gold/trading-day`
+Returns only the current UTC trading-day realtime points (`gold_prices`) plus summary values.
+
+Response `200` example:
+
+```json
+{
+  "tradingDay": "2026-03-26",
+  "previousClose": 3024.15,
+  "high": 3040.22,
+  "low": 3018.76,
+  "points": [
+    { "timestamp": 1774473600000, "price": 3022.55 },
+    { "timestamp": 1774473720000, "price": 3023.10 }
+  ]
+}
+```
+
+Notes:
+- `points` includes all stored points for the current UTC day only.
+- `previousClose` is taken from the previous daily candle close when available.
+- If no previous daily candle exists, it falls back to the latest realtime point before the current day.
+
 OHLC response example (`3m`, `6m`, `ytd`, `1y`, `2y`, `5y`, `10y`):
 
 ```json

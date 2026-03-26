@@ -15,3 +15,11 @@ export interface GoldCandle {
     low: number;
     close: number;
 }
+
+export interface GoldTradingDayData {
+    tradingDay: string; // "YYYY-MM-DD" (UTC)
+    previousClose: number | null;
+    high: number | null;
+    low: number | null;
+    points: GoldPricePoint[];
+}
