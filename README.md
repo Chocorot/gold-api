@@ -115,7 +115,10 @@ Response `200` example:
 ```
 
 #### `GET /api/gold/trading-day`
-Returns only the current UTC trading-day realtime points (`gold_prices`) plus summary values.
+Returns realtime points (`gold_prices`) plus summary values for the active or most recently completed trading day (XAU/USD). Gold trades 24 hours a day from Sunday 18:00 to Friday 17:00 New York time, with a daily 1-hour break from 17:00 to 18:00.
+
+- **During Active Market Hours**: Returns all points for the current ongoing trading session (starting at 18:00 NY time the previous day).
+- **During Weekends & Daily Breaks**: If requested outside of trading hours, the API automatically returns the **full data of the previous completed trading day**. This ensures clients always receive a complete set of data to render, even on a Saturday.
 
 Response `200` example:
 
@@ -133,9 +136,9 @@ Response `200` example:
 ```
 
 Notes:
-- `points` includes all stored points for the current UTC day only.
+- `points` includes all stored points exactly matching the resolved NY trading session.
 - `previousClose` is taken from the previous daily candle close when available.
-- If no previous daily candle exists, it falls back to the latest realtime point before the current day.
+- If no previous daily candle exists, it falls back to the latest realtime point before the active session.
 
 OHLC response example (`3m`, `6m`, `ytd`, `1y`, `2y`, `5y`, `10y`):
 

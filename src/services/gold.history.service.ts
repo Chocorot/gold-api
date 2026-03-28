@@ -195,14 +195,76 @@ class GoldHistoryService {
         return this.downsamplePoints(points, sampleMs);
     }
 
-    private formatUtcDate(ms: number): string {
-        return new Date(ms).toISOString().split('T')[0];
+    private getNYTradingDay(nowMs = Date.now()): { startMs: number, endMs: number, tradingDayStr: string } {
+        const formatter = new Intl.DateTimeFormat('en-US', {
+            timeZone: 'America/New_York',
+            hourCycle: 'h23',
+            year: 'numeric', month: '2-digit', day: '2-digit',
+            hour: '2-digit', minute: '2-digit', second: '2-digit'
+        });
+        
+        const parts = formatter.formatToParts(new Date(nowMs));
+        const p = (type: string) => parts.find(x => x.type === type)!.value;
+        const year = parseInt(p('year'));
+        const month = parseInt(p('month')); // 1-12
+        const day = parseInt(p('day'));
+        const hour = parseInt(p('hour'));
+        
+        const nyDateObj = new Date(Date.UTC(year, month - 1, day));
+        const dayOfWeek = nyDateObj.getUTCDay(); // 0-6
+
+        let isClosed = false;
+        if (dayOfWeek === 6) isClosed = true; // Saturday
+        else if (dayOfWeek === 0 && hour < 18) isClosed = true; // Sunday before 6 PM
+        else if (dayOfWeek === 5 && hour >= 17) isClosed = true; // Friday after 5 PM
+        else if (hour === 17) isClosed = true; // Daily break Mon-Thu 5 PM - 6 PM
+
+        const tradingDayNY = new Date(Date.UTC(year, month - 1, day));
+        if (!isClosed) {
+            if (hour >= 18) {
+                tradingDayNY.setUTCDate(tradingDayNY.getUTCDate() + 1);
+            }
+        } else {
+            if (dayOfWeek === 6) {
+                tradingDayNY.setUTCDate(tradingDayNY.getUTCDate() - 1); // Sat -> Fri
+            } else if (dayOfWeek === 0) {
+                tradingDayNY.setUTCDate(tradingDayNY.getUTCDate() - 2); // Sun -> Fri
+            } else if (dayOfWeek === 5 && hour >= 17) {
+                // Friday after 5pm, the trading day that just ended was Friday
+            } else if (hour === 17) {
+                // daily break, the trading day that just ended was today
+            }
+        }
+
+        const endYear = tradingDayNY.getUTCFullYear();
+        const endMonth = tradingDayNY.getUTCMonth();
+        const endDate = tradingDayNY.getUTCDate();
+        
+        const startObj = new Date(Date.UTC(endYear, endMonth, endDate - 1));
+        const startYear = startObj.getUTCFullYear();
+        const startMonth = startObj.getUTCMonth();
+        const startDateObjDay = startObj.getUTCDate();
+        
+        const getUtcMs = (y: number, m: number, d: number, h: number) => {
+            const tryEdtStr = `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}T${String(h).padStart(2, '0')}:00:00.000-04:00`;
+            const dateEdt = new Date(tryEdtStr);
+            const tf = formatter.formatToParts(dateEdt);
+            const tryH = parseInt(tf.find(x => x.type === 'hour')!.value);
+            if (tryH === h) return dateEdt.getTime();
+            
+            const tryEstStr = `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}T${String(h).padStart(2, '0')}:00:00.000-05:00`;
+            return new Date(tryEstStr).getTime();
+        };
+
+        const startMs = getUtcMs(startYear, startMonth, startDateObjDay, 18);
+        const endMs = getUtcMs(endYear, endMonth, endDate, 17);
+        const tradingDayStr = `${endYear}-${String(endMonth + 1).padStart(2, '0')}-${String(endDate).padStart(2, '0')}`;
+        
+        return { startMs, endMs, tradingDayStr };
     }
 
     async getTradingDayData(): Promise<GoldTradingDayData> {
-        const now = new Date();
-        const startMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-        const endMs = startMs + DAY_MS;
+        const { startMs, endMs, tradingDayStr } = this.getNYTradingDay(Date.now());
 
         const startTs = Timestamp.fromMillis(startMs);
         const endTs = Timestamp.fromMillis(endMs);
@@ -225,7 +287,10 @@ class GoldHistoryService {
             };
         });
 
-        const previousDate = this.formatUtcDate(startMs - DAY_MS);
+        const previousSessionMs = startMs - 1000;
+        const prevSession = this.getNYTradingDay(previousSessionMs);
+        const previousDate = prevSession.tradingDayStr;
+
         const previousDaySnap = await this.col('daily').doc(previousDate).get();
 
         let previousClose: number | null = null;
@@ -250,7 +315,7 @@ class GoldHistoryService {
         const low = prices.length ? Math.min(...prices) : null;
 
         return {
-            tradingDay: this.formatUtcDate(startMs),
+            tradingDay: tradingDayStr,
             previousClose,
             high,
             low,
